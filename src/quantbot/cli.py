@@ -36,6 +36,8 @@ def cmd_check(cfg: Config, args) -> int:
     pairs = client.pairs()
     print(f"{len(pairs)} pairs listed, {sum(p.can_trade for p in pairs.values())} tradable")
     tickers = client.ticker()
+    dead = sorted(set(pairs) - set(tickers))
+    print(f"{len(tickers)} pairs have live prices" + (f"; no live price: {dead}" if dead else ""))
     top = sorted(tickers.values(), key=lambda t: t.quote_volume, reverse=True)[:8]
     print("\nTop pairs by 24h volume:")
     for t in top:

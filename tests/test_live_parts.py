@@ -36,3 +36,17 @@ def test_repo_config_loads():
     assert cfg.live.dry_run is True
     assert cfg.fees.taker == 0.001 and cfg.fees.maker == 0.0005
     assert cfg.data.start == "2023-01-01"
+
+
+def test_tradable_requires_live_price():
+    from conftest import make_pair
+
+    from quantbot.config import Config
+    from quantbot.live.runner import LiveRunner
+    from quantbot.strategy.flat import Flat
+
+    r = LiveRunner(Config(), client=None, strategy=Flat(), universe={}, store=StateStore(":memory:"))
+    r.pair_infos = {p: make_pair(p) for p in ["BTC/USD", "OMNI/USD", "TON/USD"]}
+    assert r.tradable == {"BTC/USD", "OMNI/USD", "TON/USD"}  # before the first ticker
+    r._live_pairs = {"BTC/USD"}
+    assert r.tradable == {"BTC/USD"}

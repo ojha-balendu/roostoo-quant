@@ -51,7 +51,7 @@ pairs:
   "NBISB/USD": null  # Nebius Group N.V
   "NEAR/USD": NEARUSDT  # NEAR
   "NVDAB/USD": null  # Nvidia
-  "OMNI/USD": OMNIUSDT  # OMNI
+  "OMNI/USD": null  # OMNI
   "ONDO/USD": ONDOUSDT  # ONDO
   "OPEN/USD": OPENUSDT  # OPEN
   "PAXG/USD": PAXGUSDT  # PAXG
@@ -74,7 +74,7 @@ pairs:
   "STO/USD": STOUSDT  # STO
   "SUI/USD": SUIUSDT  # Sui
   "TAO/USD": TAOUSDT  # TAO
-  "TON/USD": TONUSDT  # Toncoin
+  "TON/USD": null  # Toncoin
   "TRUMP/USD": TRUMPUSDT  # TRUMP
   "TRX/USD": TRXUSDT  # TRON
   "TSLAB/USD": null  # Tesla

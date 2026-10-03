@@ -51,6 +51,7 @@ class LiveRunner:
         self.closes = pd.DataFrame()
         self.pair_infos: dict = {}
         self.executor: Executor | None = None
+        self._live_pairs: set[str] = set()  # pairs with a live price in the latest ticker
         self._stop = False
         self._bars_since_rebalance = 0
         self._next_time_sync = 0.0
@@ -69,7 +70,10 @@ class LiveRunner:
 
     @property
     def tradable(self) -> set[str]:
-        return {p for p, i in self.pair_infos.items() if i.can_trade}
+        """Listed with CanTrade AND quoted in the ticker. exchangeInfo can list pairs that have
+        no live price (seen with OMNI/USD and TON/USD), which cannot actually be traded."""
+        listed = {p for p, i in self.pair_infos.items() if i.can_trade}
+        return listed & self._live_pairs if self._live_pairs else listed
 
     def _refresh_exchange_info(self) -> None:
         self.pair_infos = self.client.pairs()
@@ -121,6 +125,10 @@ class LiveRunner:
         log.info("starting quantbot: strategy=%s interval=%s mode=%s",
                  self.strategy.name, self.cfg.live.bar_interval, mode)
         self._maintenance(time.time())
+        self._live_pairs = set(self.client.ticker())
+        dead = sorted(set(self.pair_infos) - self._live_pairs)
+        if dead:
+            log.warning("listed but no live price (ignored): %s", dead)
         self._warmup()
         snap = self._snapshot()
         self.store.record_equity(snap)
@@ -160,6 +168,7 @@ class LiveRunner:
         if not tickers:
             log.warning("empty ticker response")
             return
+        self._live_pairs = set(tickers)
         ts_ms = max(t.server_ts for t in tickers.values()) or self.client.now_ms()
         if self.cfg.live.record_ticks:
             self.store.insert_ticks(ts_ms, tickers)
