@@ -42,7 +42,7 @@ live:
 
 accounting:
   # Whether locked short collateral shows up in the USD balance. Determine it with `quantbot smoke-test --trade`.
-  short_collateral_in_usd_balance: false
+  short_collateral_in_usd_balance: true
 
 strategy:
   name: xs_momentum             # placeholder until research produces a real strategy
