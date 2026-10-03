@@ -1,0 +1,21 @@
+# Installed by deploy/ec2_setup.sh (placeholders are filled in automatically).
+[Unit]
+Description=Roostoo competition trading bot
+After=network-online.target time-sync.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__REPO_DIR__
+EnvironmentFile=__REPO_DIR__/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__REPO_DIR__/.venv/bin/python -m quantbot live
+Restart=always
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

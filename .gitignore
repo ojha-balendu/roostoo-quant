@@ -1,0 +1,29 @@
+# secrets
+.env
+*.pem
+
+# runtime state / outputs
+data/
+state/
+logs/
+reports/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# research
+.ipynb_checkpoints/
+*.parquet
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/

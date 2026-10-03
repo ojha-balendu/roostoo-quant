@@ -1,0 +1,9 @@
+# Roostoo pair -> Binance symbol. Starter file only.
+# Regenerate from the live exchange with:  quantbot universe
+# Set a symbol to null if Binance has no data for it (e.g. tokenized stocks).
+pairs:
+  "BTC/USD": BTCUSDT
+  "ETH/USD": ETHUSDT
+  "BNB/USD": BNBUSDT
+  "SOL/USD": SOLUSDT
+  "XRP/USD": XRPUSDT
