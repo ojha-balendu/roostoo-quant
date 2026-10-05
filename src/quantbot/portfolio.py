@@ -78,6 +78,13 @@ class PortfolioSnapshot:
         gross += sum(pos.qty * self.price(p) for p, pos in self.shorts.items())
         return gross / eq
 
+    def accounting_consistent(self) -> bool:
+        """False when the collateral setting is provably wrong: if short collateral were part of the USD
+        balance, USD free + locked could never be smaller than the total collateral of open shorts."""
+        if not self.collateral_in_usd_balance or not self.shorts:
+            return True
+        return self.usd_total + 1.0 >= sum(pos.collateral for pos in self.shorts.values())
+
     def pairs_with_positions(self) -> set[str]:
         return {p for p, q in self.longs.items() if q > 0} | {p for p, s in self.shorts.items() if s.qty > 0}
 

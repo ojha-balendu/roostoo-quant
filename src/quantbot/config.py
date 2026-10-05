@@ -58,6 +58,7 @@ class LiveConfig:
     poll_seconds: float = 10.0
     bar_interval: str = "15m"
     rebalance_every_bars: int = 1
+    rebalance_utc_hours: list[int] | None = None  # e.g. [0]: rebalance on bars closing at 00:00 UTC
     warmup_bars: int = 500
     warmup_source: str = "binance"
     db_path: str = "state/bot.sqlite"

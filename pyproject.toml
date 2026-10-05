@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
 research = ["jupyterlab", "matplotlib", "scipy", "statsmodels"]
+rl = ["gymnasium>=0.29", "stable-baselines3>=2.3", "torch>=2.1", "matplotlib"]
 
 [project.scripts]
 quantbot = "quantbot.cli:main"
@@ -38,3 +39,7 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/quantbot/analysis/indicators.py" = ["E741"]  # h, l, c = high, low, close (standard OHLC notation)
+"tests/test_indicators.py" = ["E741"]

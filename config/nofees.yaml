@@ -1,0 +1,73 @@
+# quantbot configuration. Secrets (API keys) live in .env, never here.
+
+exchange:
+  base_url: https://mock-api.roostoo.com
+  timeout_seconds: 10
+  max_retries: 3
+  # Client-side throttle between requests. Tighten/loosen once the competition's rate limits are known.
+  min_request_interval_seconds: 0.2
+
+fees:
+  taker: 0.0
+  maker: 0.0
+  short_open: 0.0
+  short_close: 0.0
+
+execution:
+  long_order_mode: market       # market | passive_limit (limit at the touch, fall back to market after timeout)
+  limit_timeout_seconds: 60
+  min_trade_usd: 50             # ignore position adjustments smaller than this (fee drag)
+  min_close_usd: 2              # full exits smaller than this are left as dust
+  rebalance_threshold: 0.02     # ignore weight changes smaller than 2% of equity
+  cash_buffer: 0.005            # keep 0.5% of equity in USD for fees/rounding
+  pause_between_orders_seconds: 0.3
+
+risk:
+  max_gross_leverage: 1.0       # longs + shorts both consume USD (spot purchase / short collateral)
+  max_weight_per_asset: 0.20
+  max_drawdown_kill: 0.25       # flatten everything if equity falls 25% below its peak...
+  kill_cooldown_hours: 24       # ...then resume automatically after this long, with a fresh peak
+
+live:
+  dry_run: true                 # log intended orders only. Override with `quantbot live --no-dry-run`
+  poll_seconds: 10              # one /v3/ticker call per poll returns every pair
+  bar_interval: 15m
+  rebalance_every_bars: 1
+  warmup_bars: 500
+  warmup_source: binance        # binance (data-api.binance.vision) | local (only bars recorded by the bot)
+  db_path: state/bot.sqlite
+  record_ticks: true            # store every ticker poll; useful research data on Roostoo's own prices/spreads
+  heartbeat_minutes: 15
+  log_dir: logs
+
+accounting:
+  # Whether locked short collateral shows up in the USD balance. Determine it with `quantbot smoke-test --trade`.
+  short_collateral_in_usd_balance: true
+
+strategy:
+  name: xs_momentum             # placeholder until research produces a real strategy
+  params:
+    lookback_bars: 96
+    top_n: 3
+    bottom_n: 3
+    gross: 0.6
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  universe_path: config/universe.yaml
+  market: spot                  # spot | um | cm
+  interval: 1h
+  start: "2023-01-01"
+  end: null
+  max_workers: 8
+  verify_checksum: true
+  # Manual Roostoo pair -> Binance symbol fixes applied by `quantbot universe` (null = no Binance data)
+  symbol_overrides: {}
+
+backtest:
+  initial_capital: 100000
+  long_fee: taker               # taker | maker  (what to assume for spot long trades)
+  spread_bps: 2.0               # full bid/ask spread paid when crossing
+  execution_delay_bars: 1       # weights decided at bar t close trade at bar t+1
+  report_dir: reports

@@ -46,7 +46,10 @@ def run_backtest(
     min_close_usd: float = 2.0,
     threshold: float = 0.02,
     cash_buffer: float = 0.005,
+    trade_on: pd.Series | np.ndarray | None = None,
 ) -> BacktestResult:
+    """trade_on: optional boolean per bar; when given, orders are only placed on True bars
+    (e.g. once an hour) while equity is still marked every bar."""
     fees = fees or FeeConfig()
     closes = closes.sort_index().ffill()
     w = target_weights.reindex(index=closes.index, columns=closes.columns).fillna(0.0)
@@ -57,6 +60,12 @@ def run_backtest(
     pairs = list(closes.columns)
     index = closes.index
     n_t, n_a = P.shape
+    if trade_on is None:
+        can_trade = np.ones(n_t, dtype=bool)
+    else:
+        can_trade = np.asarray(trade_on, dtype=bool)
+        if len(can_trade) != n_t:
+            raise ValueError("trade_on must have one entry per bar")
 
     long_rate = fees.taker if long_fee == "taker" else fees.maker
     hs = spread_bps / 2e4
@@ -83,6 +92,8 @@ def run_backtest(
         if equity <= 0:
             eq[t:] = max(equity, 0.0)
             break
+        if not can_trade[t]:
+            continue
 
         active = np.flatnonzero(valid & ((W[t] != 0) | (lq > 0) | (sq > 0)))
         reducing, increasing = [], []

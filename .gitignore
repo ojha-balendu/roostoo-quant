@@ -3,10 +3,11 @@
 *.pem
 
 # runtime state / outputs
-data/
-state/
-logs/
-reports/
+/data/
+/state/
+/logs/
+/reports/
+/models/
 
 # python
 __pycache__/

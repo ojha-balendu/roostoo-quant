@@ -34,6 +34,11 @@ from quantbot.strategy.base import Strategy
 log = logging.getLogger(__name__)
 
 TIME_SYNC_EVERY_S = 30 * 60
+
+
+def is_rebalance_time(close_time: pd.Timestamp, utc_hours: list[int]) -> bool:
+    """True for a bar that closes exactly on one of the scheduled UTC hours."""
+    return close_time.minute == 0 and close_time.second == 0 and close_time.hour in set(utc_hours)
 EXCHANGE_INFO_EVERY_S = 6 * 3600
 
 
@@ -181,7 +186,10 @@ class LiveRunner:
             self.closes = closes[~closes.index.duplicated(keep="last")].sort_index().tail(
                 max(self.cfg.live.warmup_bars, self.strategy.warmup_bars) * 2)
             self._bars_since_rebalance += 1
-            if self._bars_since_rebalance >= self.cfg.live.rebalance_every_bars:
+            hours = self.cfg.live.rebalance_utc_hours
+            due = (is_rebalance_time(bar_ts + self.interval, hours) if hours
+                   else self._bars_since_rebalance >= self.cfg.live.rebalance_every_bars)
+            if due:
                 self._rebalance(tickers)
         if time.time() >= self._next_heartbeat:
             snap = self._snapshot(tickers)
@@ -194,7 +202,14 @@ class LiveRunner:
         self._bars_since_rebalance = 0
         snap = self._snapshot(tickers)
         self.store.record_equity(snap)
-        if not self.risk.update_drawdown(snap.equity):
+        if not snap.accounting_consistent():
+            log.critical("USD balance %.2f is below open short collateral: accounting.short_collateral_in_usd_balance "
+                         "must be false for this account (run `quantbot smoke-test --trade`). Equity is understated, "
+                         "so the drawdown check is skipped this cycle.", snap.usd_total)
+            allowed = True
+        else:
+            allowed = self.risk.update_drawdown(snap.equity)
+        if not allowed:
             targets: dict[str, float] = {}
             log.warning("risk halt active: targeting flat")
         else:
