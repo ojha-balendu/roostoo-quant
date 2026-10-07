@@ -149,3 +149,31 @@ def test_perfect_foresight_canary_proves_timing():
     stale = simulate(P, idx, lambda t, cur: v1_weights(sp_future[t - 1], elig, beta, cfg), 1, 399, zero)
     assert good["equity"].iloc[-1] > 3e6                                  # knowing the future pays enormously
     assert abs(stale["equity"].iloc[-1] / 1e6 - 1) < 0.25                 # one bar late: nothing special
+
+
+def test_topk_weights_long_strongest_short_weakest_beta_neutral():
+    from quantbot.backtest.composite_bt import topk_weights
+
+    rng = np.random.default_rng(4)
+    sig, beta = rng.normal(size=30), rng.uniform(0.6, 1.8, 30)
+    w = topk_weights(sig, np.ones(30, bool), beta, 5, 0.95)
+    order = np.argsort(sig)
+    assert (w[order[-5:]] > 0).all() and (w[order[:5]] < 0).all() and np.count_nonzero(w[:30]) == 10
+    assert abs(np.dot(w[:30], beta) + w[30]) < 1e-12 and abs(np.abs(w).sum() - 0.95) < 1e-12
+    assert not topk_weights(sig, np.arange(30) < 8, beta, 5, 0.95).any()      # fewer than 2k eligible: flat
+
+
+def test_signal_periods_fixed_k():
+    from quantbot.analysis.xsection import signal_periods
+
+    rng = np.random.default_rng(5)
+    idx = pd.date_range("2026", periods=200, freq="1h", tz="UTC")
+    cols = [f"C{i}/USD" for i in range(30)]
+    resid = pd.DataFrame(rng.normal(0, 0.01, (200, 30)), index=idx, columns=cols)
+    sig = pd.DataFrame(np.tile(np.arange(30.0), (200, 1)), index=idx, columns=cols)   # fixed ranking
+    beta = pd.DataFrame(1.0, index=idx, columns=cols)
+    elig = pd.DataFrame(True, index=idx, columns=cols)
+    p = signal_periods(sig, resid, beta, elig, horizon=24, k=5)
+    expected = (resid.iloc[1:25, 25:].sum().mean() - resid.iloc[1:25, :5].sum().mean()) * 1e4
+    assert abs(p["spread_bps"].iloc[0] - expected) < 1e-9                     # top 5 minus bottom 5, next 24 bars
+    assert abs(p["turnover"].iloc[0] - 2.0) < 1e-12 and np.allclose(p["turnover"].iloc[1:], 0)

@@ -27,8 +27,8 @@ def test_ensemble_is_weighted_average_of_members():
     assert ens.warmup_bars == TrendVolTarget(**a).warmup_bars
 
 
-def test_competition_config_builds_the_intended_portfolio():
-    cfg = load_config("config/competition.yaml")
+def test_trend_ensemble_config_builds_the_intended_portfolio():
+    cfg = load_config("config/trend_ensemble.yaml")
     s = get_strategy(cfg.strategy.name, cfg.strategy.params)
     assert isinstance(s, Ensemble) and len(s.members) == 2
     (m1, w1), (m2, w2) = s.members
@@ -59,3 +59,20 @@ def test_accounting_check_catches_wrong_collateral_setting():
     bad = PortfolioSnapshot(0, usd_free=50_000, usd_lock=0, shorts=short, collateral_in_usd_balance=True)
     assert not bad.accounting_consistent()
     assert PortfolioSnapshot(0, 50_000, 0, shorts=short, collateral_in_usd_balance=False).accounting_consistent()
+
+
+def test_competition_config_runs_momentum_c():
+    from quantbot.backtest.momentum import MomentumConfig
+    from quantbot.strategy.momentum_sleeve import MomentumSleeve
+
+    cfg = load_config("config/competition.yaml")
+    s = get_strategy(cfg.strategy.name, cfg.strategy.params)
+    assert isinstance(s, MomentumSleeve) and s.needs_quote_volume
+    tested_c = MomentumConfig(residual_riskadj=True, buffer_k=10)              # research/18 variant C
+    assert s.mc == tested_c
+    assert s.min_usd_per_hour == 200_000 and s.min_history_hours == 720 and s.rebalance_utc_hour == 0
+    assert cfg.live.bar_interval == "1h" and cfg.live.rebalance_utc_hours == [0]
+    assert cfg.live.warmup_bars >= s.warmup_bars and cfg.live.dry_run is True
+    assert cfg.execution.pause_between_orders_seconds >= 60 and cfg.execution.rebalance_threshold == 0.005
+    assert cfg.risk.max_weight_per_asset >= 0.2 and cfg.risk.max_gross_leverage >= 0.95
+    assert cfg.accounting.short_collateral_in_usd_balance is True and cfg.backtest.initial_capital == 1_000_000

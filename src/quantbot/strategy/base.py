@@ -23,9 +23,15 @@ import pandas as pd
 
 class Strategy(ABC):
     name: str = "base"
+    needs_quote_volume: bool = False  # live runner fetches hourly USD volumes when True
 
     def __init__(self, **params: Any):
         self.params = params
+        self.context: dict[str, Any] = {}
+
+    def set_context(self, **context: Any) -> None:
+        """Extra live inputs (e.g. quote_volume, holdings, tradable), refreshed before each rebalance."""
+        self.context = dict(context)
 
     @property
     def warmup_bars(self) -> int:

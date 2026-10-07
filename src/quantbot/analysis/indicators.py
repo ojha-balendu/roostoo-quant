@@ -37,6 +37,7 @@ def _per_column(x: pd.DataFrame, n: int, reducer) -> pd.DataFrame:
 
 def rsi(c, n=14):
     d = c.diff()
+    d = d.where(d.abs() > 1e-12 * c.abs(), 0.0).where(d.notna())  # floating-point noise is not a move
     up, dn = wilder(d.clip(lower=0), n), wilder((-d).clip(lower=0), n)
     return _clean(100 - 100 / (1 + up / dn)).where(up.notna())
 

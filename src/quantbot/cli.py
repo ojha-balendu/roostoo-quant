@@ -96,6 +96,71 @@ def cmd_download(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_futures(cfg: Config, args) -> int:
+    """Funding rates and open-interest metrics for the perpetuals of the coins in the universe."""
+    import json
+    from datetime import timedelta
+
+    from quantbot.data.binance_vision import BinanceVisionDownloader
+    from quantbot.data.futures import (
+        load_futures_panel,
+        perp_candidates,
+        process_futures,
+        save_symbol_map,
+        symbols_path,
+    )
+    from quantbot.data.universe import load_universe
+
+    universe = load_universe(cfg.data.universe_path)
+    pairs = args.pairs or sorted(universe)
+    today = datetime.now(timezone.utc).date()
+    raw, proc = cfg.data.raw_dir, cfg.data.processed_dir
+
+    def downloader(data_type: str) -> BinanceVisionDownloader:
+        return BinanceVisionDownloader(raw, market="um", data_type=data_type, interval="",
+                                       max_workers=cfg.data.max_workers, verify_checksum=cfg.data.verify_checksum)
+
+    mapping = json.loads(symbols_path(proc).read_text()) if symbols_path(proc).exists() else {}
+    probe = downloader("fundingRate")
+    probe_month = ((today.replace(day=1) - timedelta(days=1)).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    for pair in pairs:
+        if pair in mapping or pair not in universe:
+            continue
+        mapping[pair] = None
+        for cand in perp_candidates(universe[pair]):
+            if probe.fetch(probe.url_for(cand, "monthly", probe_month)) in ("ok", "exists"):
+                mapping[pair] = cand
+                break
+    save_symbol_map(proc, mapping)
+    perps = sorted({mapping[p] for p in pairs if mapping.get(p)})
+    no_perp = [p for p in pairs if not mapping.get(p)]
+    print(f"{len(perps)} of {len(pairs)} pairs have a Binance perpetual"
+          + (f"; none for: {[p.split('/')[0] for p in no_perp]}" if no_perp else ""))
+    renamed = {p: m for p, m in mapping.items() if m and p in pairs and m != universe[p]}
+    if renamed:
+        print(f"perpetual symbols that differ from spot: {renamed}")
+
+    jobs = []
+    if args.what in ("funding", "both"):
+        jobs.append(("fundingRate", date.fromisoformat(args.start or cfg.data.start), False))
+    if args.what in ("metrics", "both"):
+        jobs.append(("metrics", today - timedelta(days=args.days), True))
+    for data_type, start, daily in jobs:
+        print(f"downloading {data_type} from {start} for {len(perps)} perpetuals"
+              + (" (daily files: this can take a while)" if daily else ""))
+        downloader(data_type).download(perps, start, today, daily_only=daily)
+        done = [s for s in perps if process_futures(raw, proc, data_type, s)]
+        print(f"  processed {len(done)}/{len(perps)}")
+        column = "rate" if data_type == "fundingRate" else "oi"
+        panel = load_futures_panel(proc, data_type, column)
+        if not panel.empty:
+            print(f"  {data_type}: {panel.shape[1]} coins, {panel.index.min():%Y-%m-%d %H:%M} -> "
+                  f"{panel.index.max():%Y-%m-%d %H:%M}; sample (check the numbers look sane):")
+            sample = panel[[c for c in ("BTC/USD", "ETH/USD") if c in panel]].dropna(how="all").tail(3)
+            print("    " + sample.to_string().replace("\n", "\n    "))
+    return 0
+
+
 def cmd_backtest(cfg: Config, args) -> int:
     from quantbot.backtest.engine import run_backtest
     from quantbot.data.loader import load_panel
@@ -230,6 +295,12 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--data-type", default="klines", choices=["klines", "aggTrades", "trades"])
     d.add_argument("--no-process", action="store_true", help="skip building parquet files")
 
+    fu = sub.add_parser("futures", help="download Binance perpetual funding rates and open-interest metrics")
+    fu.add_argument("--what", default="both", choices=["funding", "metrics", "both"])
+    fu.add_argument("--start", help="funding history start (default: data.start)")
+    fu.add_argument("--days", type=int, default=365, help="days of 5-minute open-interest metrics")
+    fu.add_argument("--pairs", nargs="*", help="Roostoo pairs (default: whole universe)")
+
     b = sub.add_parser("backtest", help="backtest a strategy on downloaded data")
     b.add_argument("--strategy")
     b.add_argument("--params", help='JSON, e.g. \'{"lookback_bars": 48}\'')
@@ -255,6 +326,7 @@ COMMANDS = {
     "check": cmd_check,
     "universe": cmd_universe,
     "download": cmd_download,
+    "futures": cmd_futures,
     "backtest": cmd_backtest,
     "live": cmd_live,
     "flatten": cmd_flatten,

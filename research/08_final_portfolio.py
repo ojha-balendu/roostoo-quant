@@ -1,6 +1,6 @@
 """Evaluate the portfolio exactly as configured for the competition.
 
-    python research/08_final_portfolio.py                          # uses config/competition.yaml
+    python research/08_final_portfolio.py                          # uses config/trend_ensemble.yaml
     python research/08_final_portfolio.py --config config/config.yaml
 
 Builds the strategy, risk limits, rebalancing schedule, thresholds and capital from the
@@ -43,7 +43,7 @@ def schedule(index: pd.DatetimeIndex, cfg: Config) -> np.ndarray:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="config/competition.yaml")
+    ap.add_argument("--config", default="config/trend_ensemble.yaml")
     ap.add_argument("--window-days", type=float, default=14)
     args = ap.parse_args()
 

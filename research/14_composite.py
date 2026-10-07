@@ -149,6 +149,7 @@ def main() -> None:
             curves.setdefault(sname, []).append(res["equity"])
         t = pd.DataFrame(rows).T
         show = pd.DataFrame({
+            "score": t["score"].map("{:+.2f}".format),
             "return": t["return"].map("{:+.1%}".format),
             "CAGR": t["cagr"].map(lambda v: f"{v:+.1%}" if np.isfinite(v) else "n/a"),
             "Sharpe": t["sharpe"].map("{:.2f}".format), "Sortino": t["sortino"].map("{:.2f}".format),
@@ -170,12 +171,12 @@ def main() -> None:
             res = simulate(P, idx, decide, a, a + step, cfg.sim_config(zero_cost=zero))
             m = run_metrics(res, cfg.capital)
             wins[sname].append({"return": m["return"], "max_dd": m["max_dd"], "sharpe": m["sharpe"],
-                                "sortino": m["sortino"], "calmar": m["calmar"], "fees": res["fees"],
+                                "sortino": m["sortino"], "calmar": m["calmar"], "score": m["score"], "fees": res["fees"],
                                 "trades": res["trades"], "avg_gross": res["avg_gross"], "beta_btc": np.nan})
     wdf = {k: pd.DataFrame(v) for k, v in wins.items()}
     summ = pd.DataFrame({k: summarize(v, versus=wdf["hold BTC"]) for k, v in wdf.items()})
     keep = ["windows", "median_return", "mean_return", "worst_return", "pct_positive", "median_max_dd", "worst_max_dd",
-            "median_sharpe", "median_sortino", "median_calmar", "avg_fees", "pct_beats_benchmark"]
+            "median_sharpe", "median_sortino", "median_calmar", "median_score", "avg_fees", "pct_beats_benchmark"]
     pct = {"median_return", "mean_return", "worst_return", "pct_positive", "median_max_dd", "worst_max_dd",
            "pct_beats_benchmark"}
     show = summ.loc[keep].astype(object)

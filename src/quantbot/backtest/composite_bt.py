@@ -162,7 +162,21 @@ def run_metrics(res: dict, capital: float) -> dict[str, float]:
     return {
         "return": m.get("total_return", 0.0), "cagr": m.get("cagr", np.nan), "vol": m.get("ann_vol", np.nan),
         "sharpe": m.get("sharpe", np.nan), "sortino": m.get("sortino", np.nan), "calmar": m.get("calmar", np.nan),
+        "score": m.get("score", np.nan),
         "max_dd": m.get("max_drawdown", 0.0), "gross_pnl": res["pnl"] / capital, "fees_pct": res["fees"] / capital,
         "turnover_yr": res["traded"] / eq.mean() / years if years and years > 0 else np.nan,
         "trades": res["trades"], "avg_gross": res["avg_gross"], "avg_positions": res["avg_positions"],
     }
+
+
+def topk_weights(sig_row: np.ndarray, elig_row: np.ndarray, beta_row: np.ndarray, k: int, gross: float) -> np.ndarray:
+    """Long the k highest-signal coins, short the k lowest, equal weight, BTC hedge to zero beta (last slot)."""
+    n = len(sig_row)
+    w = np.zeros(n + 1)
+    idx = np.flatnonzero(elig_row & np.isfinite(sig_row) & np.isfinite(beta_row))
+    if len(idx) < 2 * k:
+        return w
+    order = idx[np.argsort(sig_row[idx], kind="stable")]
+    w[order[-k:]], w[order[:k]] = 1.0 / k, -1.0 / k
+    w[n] = -float(np.dot(w[:n][idx], beta_row[idx]))
+    return w * (gross / np.abs(w).sum())

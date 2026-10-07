@@ -1,0 +1,93 @@
+# Slow trend ensemble: the previous competition candidate, kept for comparison (research/08, research/19).
+# Evaluate it:   python research/08_final_portfolio.py
+#
+# Strategy: an equal-weight ensemble of two slow trend-following books on the 15 most liquid majors
+# (3/7/14-day trends, inverse-volatility sizing, 30% portfolio volatility target, daily rebalancing),
+# one unconstrained and one that only trades in the direction of BTC's 7-day regime.
+# See README "Competition strategy" for the research behind every number here.
+
+exchange:
+  base_url: https://mock-api.roostoo.com
+  timeout_seconds: 10
+  max_retries: 3
+  min_request_interval_seconds: 0.5
+
+fees:
+  taker: 0.001
+  maker: 0.0005
+  short_open: 0.001
+  short_close: 0.001
+
+execution:
+  long_order_mode: market
+  limit_timeout_seconds: 60
+  min_trade_usd: 100
+  min_close_usd: 5
+  rebalance_threshold: 0.02          # ignore weight changes below 2% of equity (same as the backtest)
+  cash_buffer: 0.005
+  pause_between_orders_seconds: 61   # at most one order per minute
+
+risk:
+  max_gross_leverage: 1.0            # the strategy already caps gross exposure at 0.95
+  max_weight_per_asset: 0.25         # matches the strategy's own per-coin cap
+  max_drawdown_kill: 0.20            # flatten if equity falls 20% below its peak...
+  kill_cooldown_hours: 24            # ...and resume automatically a day later
+
+live:
+  dry_run: true                      # switch to false (or run with --no-dry-run) when the trading round starts
+  poll_seconds: 10
+  bar_interval: 1h
+  rebalance_utc_hours: [0]           # once a day, on the bar closing at 00:00 UTC (as in the backtest)
+  warmup_bars: 720                   # 30 days of hourly history at startup
+  warmup_source: binance
+  db_path: state/bot.sqlite
+  record_ticks: true
+  heartbeat_minutes: 15
+  log_dir: logs
+
+accounting:
+  short_collateral_in_usd_balance: true   # verified with `quantbot smoke-test --trade`
+
+strategy:
+  name: ensemble
+  params:
+    members:
+      - name: trend_vol
+        weight: 1
+        params: &trend
+          assets: &majors [BTC/USD, ETH/USD, SOL/USD, XRP/USD, BNB/USD, DOGE/USD, ADA/USD, LINK/USD,
+                           AVAX/USD, LTC/USD, DOT/USD, SUI/USD, NEAR/USD, UNI/USD, AAVE/USD]
+          lookbacks_hours: [72, 168, 336]
+          target_vol: 0.30
+          max_gross: 0.95
+          max_weight: 0.25
+          signal: tanh
+          long_in_bear: 1.0          # no regime filter
+          short_in_bull: 1.0
+      - name: trend_vol
+        weight: 1
+        params:
+          <<: *trend
+          long_in_bear: 0.0          # regime filter: only long when BTC is above its 7-day average,
+          short_in_bull: 0.0         # only short when below
+          regime_ma_hours: 168
+          regime_band: 0.01
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  universe_path: config/universe.yaml
+  market: spot
+  interval: 1h
+  start: "2023-01-01"
+  end: null
+  max_workers: 8
+  verify_checksum: true
+  symbol_overrides: {}
+
+backtest:
+  initial_capital: 1000000
+  long_fee: taker
+  spread_bps: 2.0
+  execution_delay_bars: 0
+  report_dir: reports

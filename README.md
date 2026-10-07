@@ -159,37 +159,42 @@ and run `quantbot backtest`. Keep the backtest interval and `live.bar_interval` 
 
 ## Competition strategy
 
-Configuration: [`config/competition.yaml`](config/competition.yaml). Evaluation: `python research/08_final_portfolio.py`.
+Configuration: [`config/competition.yaml`](config/competition.yaml) (strategy `momentum_sleeve`,
+`strategy/momentum_sleeve.py`). Evaluation: `python research/18_momentum_v2.py` (variant C) and
+`python research/24_combined_portfolio.py`. The previous candidate, a slow trend ensemble, is kept in
+`config/trend_ensemble.yaml`.
 
-**What it trades.** The 15 most liquid majors (BTC, ETH, SOL, XRP, BNB, DOGE, ADA, LINK, AVAX, LTC, DOT,
-SUI, NEAR, UNI, AAVE), long and short, rebalanced once a day at 00:00 UTC.
+**What it trades.** Every liquid coin listed on Roostoo (at least 30 days of history and a median of
+$200k traded per hour on Binance over the last 30 days), long and short, rebalanced once a day at 00:00 UTC.
 
-**How positions are set.** An equal-weight ensemble of two trend-following books (`strategy/trend_vol.py`):
+**How positions are set.**
 
-1. *Trend signal.* For each coin, the return over the last 3, 7 and 14 days divided by its volatility,
-   passed through `tanh` and averaged: a score between -1 and +1 that grows with trend strength.
-2. *Risk balance.* Each coin is sized by 1 / volatility so every position carries similar risk.
-3. *Volatility target.* The whole book is scaled so its expected volatility (from the last 7 days of
-   correlated returns) is 30% a year, with at most 95% of equity in use and 25% in any coin.
-4. *Two members.* One trades both directions freely; the other only goes long while BTC is above its
-   7-day average and only short while it is below. Averaging them avoids choosing between two settings
-   that performed similarly, which would mean fitting noise.
+1. *Score.* Each coin's return over the last 16 days after removing what BTC's move explains (its beta to
+   BTC times BTC's return), divided by its own volatility over the same period. This ranks coins by how
+   strongly *they themselves* trended, not by how much they amplified the market.
+2. *Selection.* Long the 5 highest scores, short the 5 lowest, equal weight.
+3. *Rank buffer.* A coin already held stays until it falls outside the top (bottom) 10. Holdings come from
+   the exchange each day, so the buffer survives restarts; positions below 0.1% of equity (dust) don't count.
+4. *Hedge.* The remaining BTC exposure of the ten positions is offset with a BTC position, so the book
+   does not depend on the market's direction. Gross exposure is 95% of equity.
 
-**Why this design.** It came out of the research log below: of every idea tested, only slow trend
-following survived Roostoo's ~0.25% round-trip cost, and its clearest benefit is much smaller
-drawdowns than holding crypto, which is what Sharpe, Sortino and Calmar reward. It trades rarely
-(a 2% weight-change threshold and a daily schedule) because fast versions lost their edge to fees.
+**Why this design.** Among everything in the research log, a relative-momentum sleeve was the idea that
+held up; the rank buffer cut its fees by more than half, and it had the best median 14-day competition
+score (0.4 Sortino + 0.3 Sharpe + 0.3 Calmar) of all the combinations tested in research/24, including
+mixes with a BTC trend sleeve and RSI. Live decisions use the same functions as the backtest, and a test
+checks they are identical at every rebalance.
 
-**Safety.** Orders are spaced 61 seconds apart (one per minute). A drawdown kill switch flattens the
-book at 20% below peak and resumes automatically after 24 hours. Every cycle starts from the balances
-and positions the exchange reports, so restarts and lost responses heal themselves. A consistency
-check refuses to trigger the kill switch if the short-collateral accounting setting looks wrong.
+**Safety.** Orders are spaced 61 seconds apart (one per minute; a full rebalance is ~11 orders). A drawdown
+kill switch flattens the book at 15% below peak and resumes automatically after 24 hours. Every cycle starts
+from the balances and positions the exchange reports, so restarts and lost responses heal themselves.
+Coins without a live Roostoo price are never picked. Volumes are refreshed from Binance before each
+rebalance; if that fails the previous ones are used.
 
 ### Running it for the competition
 
 ```bash
 # on the EC2 instance, after deploy/ec2_setup.sh
-echo "QUANTBOT_CONFIG=config/competition.yaml" >> .env
+grep QUANTBOT_CONFIG .env                      # should print QUANTBOT_CONFIG=config/competition.yaml
 .venv/bin/quantbot check                      # connectivity, balance (expect $1,000,000)
 .venv/bin/quantbot smoke-test --trade         # confirm short-collateral accounting on THIS account
 sudo systemctl start quantbot                 # dry run (config default) until the round starts
@@ -216,7 +221,17 @@ held-back final year where applicable.
 | 7 | Volatility management improves 14-day risk-adjusted ratios | `07_vol_managed.py` | No: within a 14-day window, Sharpe/Sortino/Calmar barely depend on exposure size, and timing exposure by predicted volatility did not help. |
 | 8 | Technical indicators (RSI, Williams %R, MACD, CCI, OBV, Chaikin money flow, ... 22 + taker-buy ratio) rank coins | `13_indicators.py` | See its output. Also reports which indicators are the same signal in disguise, and which patterns are real but eaten by costs. |
 | 9 | Composite indicator signal (31 weighted, normalised indicators): v1 trades the top/bottom 10% every bar; v2 trades only when the calibrated expected profit beats the fees | `14_composite.py` | See its output: both periods, every 14-day window, a shuffled-signal placebo and fee-free runs. |
-| 10 | Final portfolio (ensemble of the slow trend books) | `08_final_portfolio.py` | See its output: every 14-day window since 2023 plus a continuous backtest, using exactly the live configuration. |
+| 10 | H6: crowded funding predicts underperformance (cross-sectional, weekly, residualised on 7/30-day returns) | `15_funding_tilt.py` | See its output (needs `quantbot futures`). |
+| 11 | H5: liquidation flushes (big drop + open-interest drop + positive funding) rebound within 4-24h | `16_liquidation_rebound.py` | Event study with day-clustered t-statistics vs drops without a flush. |
+| 12 | H3: relative-momentum sleeve (long 5 strongest / short 5 weakest by 16-day return) | `17_momentum_sleeve.py` | Rules test plus the sleeve simulated as 14-day competitions. |
+| 13 | Momentum sleeve, better executed: residual risk-adjusted ranking, rank buffer, inverse-vol weights + vol target, multi-lookback, trend consistency, 30-day-high proximity (each added in turn) | `18_momentum_v2.py` | Variant chosen on the older period by a rule fixed in advance; last year as confirmation. |
+| 14 | Every strategy on the most recent 30 days (momentum A-G, trend portfolio, composite v1/v2, benchmarks), with charts | `19_last_30_days.py` | One recent draw: a sanity check, not a basis for choosing. |
+| 15 | Minute RSI (30/70, 20/80, relative to BTC) and MACD(12,26,9), with and without BTC hedges | `20_minute_rsi_macd.py` | Signal check vs the ~22 bps round trip, results with and without fees, orders per minute vs the likely 1-order-per-minute limit. |
+| 16 | Hourly RSI with extreme thresholds (20/80), recomputed every minute vs checked at hour closes, hedged and relative variants | `21_hourly_rsi.py` | Signal check over 15m-24h, holding times, results with and without fees. |
+| 17 | Tokenized gold (PAXG) vs BTC: correlation of VWAP returns at 1h/4h/1d/1w, behaviour on BTC's worst days | `22_gold_btc_correlation.py` | VWAP = USD traded / coins traded per bar. |
+| 18 | BTC/PAXG lead-lag in both directions (1m-1d), before vs since 2026, tradeability after costs and staleness | `23_paxg_btc_leadlag.py` | Close prices (VWAP overlap creates fake lags). |
+| 19 | Combined portfolio: momentum C + long-only BTC trend + RSI 15/85, several capital splits, netted execution, 1-minute bars | `24_combined_portfolio.py` | Every 14-day window in the 1-minute history plus the last 30 days, ranked by median score. |
+| 20 | Final portfolio (ensemble of the slow trend books) | `08_final_portfolio.py` | See its output: every 14-day window since 2023 plus a continuous backtest, using exactly the live configuration. |
 
 Main lesson: in liquid crypto at retail fees, small frequent price patterns do not survive costs;
 what survives is slow, risk-controlled exposure that limits drawdowns.

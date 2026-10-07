@@ -61,7 +61,8 @@ def spread_periods(resid: pd.DataFrame, beta: pd.DataFrame, eligible: pd.DataFra
 
 def signal_periods(signal: pd.DataFrame, resid: pd.DataFrame, beta: pd.DataFrame, eligible: pd.DataFrame, *,
                    horizon: int, quantile: float = 0.2, cost_one_way_bps: float = 12.5, min_coins: int = 10,
-                   start: pd.Timestamp | None = None, end: pd.Timestamp | None = None) -> pd.DataFrame:
+                   start: pd.Timestamp | None = None, end: pd.Timestamp | None = None,
+                   k: int | None = None) -> pd.DataFrame:
     """Any signal, ranked across coins every `horizon` bars: one row per non-overlapping holding
     period with the momentum-oriented spread (top minus bottom), its cost, and the rank IC
     (Spearman correlation between signal and next-period residual return across coins)."""
@@ -85,11 +86,11 @@ def signal_periods(signal: pd.DataFrame, resid: pd.DataFrame, beta: pd.DataFrame
         if len(idx) < min_coins:
             prev_w, prev_h = np.zeros(n_coins), 0.0
             continue
-        k = max(1, int(round(len(idx) * quantile)))
+        kk = min(k, len(idx) // 2) if k else max(1, int(round(len(idx) * quantile)))
         order = idx[np.argsort(S[i, idx], kind="stable")]
-        bottom, top = order[:k], order[-k:]
+        bottom, top = order[:kk], order[-kk:]
         w = np.zeros(n_coins)
-        w[top], w[bottom] = 1.0 / k, -1.0 / k
+        w[top], w[bottom] = 1.0 / kk, -1.0 / kk
         hedge = -np.nansum(w * B[i])  # BTC needed to keep the book beta-neutral
         traded = np.abs(w - prev_w).sum() + abs(hedge - prev_h)
         rs, ry = _ranks(S[i, idx]), _ranks(Y[i, idx])
@@ -137,3 +138,19 @@ def evaluate(periods: pd.DataFrame, direction: int, split: pd.Timestamp) -> dict
                  net_second_half=second.mean() if len(second) else np.nan,
                  periods_first=len(first), periods_second=len(second))
     return stats
+
+
+def judge(periods: pd.DataFrame, direction: int, split: pd.Timestamp, rules: XSRules, periods_per_14d: float) -> dict:
+    """evaluate() plus rank IC, an approximate 14-day return on a $100k book, and pass/fail per rule."""
+    st = evaluate(periods, direction, split)
+    ic = direction * periods["ic"].dropna() if "ic" in periods else pd.Series(dtype=float)
+    st["ic"] = float(ic.mean()) if len(ic) else np.nan
+    st["ic_t"] = float(ic.mean() / (ic.std() / np.sqrt(len(ic)))) if len(ic) > 2 and ic.std() > 0 else np.nan
+    st["est_14d"] = st["net_bps"] / 1e4 * periods_per_14d * 0.475
+    st["pass_profit"] = st["net_bps"] >= rules.min_net_bps
+    st["pass_confidence"] = st["t"] >= rules.min_t
+    st["pass_sample"] = (st["periods"] >= rules.min_periods and st["periods_first"] >= rules.min_periods_per_half
+                         and st["periods_second"] >= rules.min_periods_per_half)
+    st["pass_stable"] = st["net_first_half"] > 0 and st["net_second_half"] > 0
+    st["tradeable"] = bool(st["pass_profit"] and st["pass_confidence"] and st["pass_sample"] and st["pass_stable"])
+    return st

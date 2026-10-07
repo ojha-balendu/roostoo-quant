@@ -31,11 +31,10 @@ sudo systemctl enable ${SERVICE}
 cat <<MSG
 
 Setup complete. Next steps:
-  1. nano .env                                  # add API keys
+  1. nano .env                                  # add API keys (QUANTBOT_CONFIG selects config/competition.yaml)
   2. .venv/bin/quantbot check                   # connectivity + account
   3. .venv/bin/quantbot universe                # map Roostoo pairs to Binance symbols
   4. .venv/bin/quantbot smoke-test --trade      # tiny real round-trips; prints accounting setting
-  5. set live.dry_run in config/config.yaml, then:
-     sudo systemctl start ${SERVICE}
+  5. sudo systemctl start ${SERVICE}            # dry run first (live.dry_run: true in config/competition.yaml)
      journalctl -u ${SERVICE} -f
 MSG

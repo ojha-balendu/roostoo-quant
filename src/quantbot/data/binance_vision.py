@@ -146,8 +146,14 @@ class BinanceVisionDownloader:
             log.warning("download failed %s: %s", url, exc)
             return "failed"
 
-    def download_symbol(self, symbol: str, start: date, end: date, today: date | None = None) -> Counter:
+    def download_symbol(self, symbol: str, start: date, end: date, today: date | None = None,
+                        daily_only: bool = False) -> Counter:
         today = today or datetime.now(timezone.utc).date()
+        if daily_only:  # some datasets (e.g. futures metrics) are published as daily files only
+            counts: Counter = Counter()
+            for d in _days(start, min(end, today - timedelta(days=1))):
+                counts[self.fetch(self.url_for(symbol, "daily", d.isoformat()))] += 1
+            return counts
         last_month = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
         counts: Counter = Counter()
         for period, ds in plan_files(start, end, today):
@@ -162,11 +168,11 @@ class BinanceVisionDownloader:
             counts[status] += 1
         return counts
 
-    def download(self, symbols: Iterable[str], start: date, end: date) -> dict[str, Counter]:
+    def download(self, symbols: Iterable[str], start: date, end: date, daily_only: bool = False) -> dict[str, Counter]:
         symbols = list(symbols)
         results: dict[str, Counter] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-            futures = {pool.submit(self.download_symbol, s, start, end): s for s in symbols}
+            futures = {pool.submit(self.download_symbol, s, start, end, None, daily_only): s for s in symbols}
             for n, fut in enumerate(as_completed(futures), 1):
                 sym = futures[fut]
                 results[sym] = fut.result()

@@ -6,6 +6,7 @@ from quantbot.strategy.base import Strategy
 from quantbot.strategy.beta_neutral import BetaNeutralBasket
 from quantbot.strategy.ensemble import Ensemble
 from quantbot.strategy.flat import Flat
+from quantbot.strategy.momentum_sleeve import MomentumSleeve
 from quantbot.strategy.pairs_spread import PairsSpread
 from quantbot.strategy.trend_vol import TrendVolTarget
 from quantbot.strategy.vol_managed import VolManaged
@@ -20,6 +21,7 @@ STRATEGIES: dict[str, type[Strategy]] = {
     TrendVolTarget.name: TrendVolTarget,
     VolManaged.name: VolManaged,
     Ensemble.name: Ensemble,
+    MomentumSleeve.name: MomentumSleeve,
 }
 
 

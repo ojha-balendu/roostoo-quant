@@ -26,7 +26,7 @@ from quantbot.exchange.models import Ticker
 from quantbot.execution.executor import Executor
 from quantbot.live.bars import BarBuilder, parse_interval
 from quantbot.live.store import StateStore
-from quantbot.live.warmup import warmup_close_panel
+from quantbot.live.warmup import warmup_close_panel, warmup_panels
 from quantbot.portfolio import PortfolioSnapshot, fetch_snapshot
 from quantbot.risk import RiskManager
 from quantbot.strategy.base import Strategy
@@ -54,6 +54,8 @@ class LiveRunner:
         self.bars = BarBuilder(cfg.live.bar_interval)
         self.risk = RiskManager(cfg.risk, store)
         self.closes = pd.DataFrame()
+        self.quote_volume = pd.DataFrame()   # hourly USD volumes from Binance (strategies that need them)
+        self._volume_refreshed = 0.0
         self.pair_infos: dict = {}
         self.executor: Executor | None = None
         self._live_pairs: set[str] = set()  # pairs with a live price in the latest ticker
@@ -111,7 +113,12 @@ class LiveRunner:
             if mapping:
                 log.info("warm-up: fetching %d bars x %d pairs from Binance", n, len(mapping))
                 try:
-                    remote = warmup_close_panel(mapping, self.cfg.live.bar_interval, n)
+                    if self.strategy.needs_quote_volume:
+                        panels = warmup_panels(mapping, self.cfg.live.bar_interval, n)
+                        remote, self.quote_volume = panels["close"], panels["quote_volume"]
+                        self._volume_refreshed = time.time()
+                    else:
+                        remote = warmup_close_panel(mapping, self.cfg.live.bar_interval, n)
                 except Exception:
                     log.exception("warm-up from Binance failed; continuing with local bars only")
             else:
@@ -124,6 +131,20 @@ class LiveRunner:
             closes = local.combine_first(remote)  # Roostoo's own bars win where both exist
         self.closes = closes.sort_index().tail(n * 2)
         log.info("warm-up: %d bars of history (strategy needs %d)", len(self.closes), self.strategy.warmup_bars)
+
+    def _refresh_quote_volume(self) -> None:
+        """Fresh hourly USD volumes before a rebalance (at most every 6 hours); keeps the old ones on failure."""
+        if not self.strategy.needs_quote_volume or time.time() - self._volume_refreshed < 6 * 3600:
+            return
+        mapping = {p: s for p, s in self.universe.items() if p in self.tradable}
+        try:
+            panels = warmup_panels(mapping, self.cfg.live.bar_interval, max(self.cfg.live.warmup_bars, 800))
+            if not panels["quote_volume"].empty:
+                self.quote_volume = panels["quote_volume"]
+                self._volume_refreshed = time.time()
+                log.info("volumes refreshed for %d pairs", self.quote_volume.shape[1])
+        except Exception:
+            log.exception("volume refresh failed; using the previous volumes")
 
     def _startup(self) -> None:
         mode = "DRY-RUN (no orders sent)" if self.cfg.live.dry_run else "LIVE TRADING"
@@ -217,6 +238,8 @@ class LiveRunner:
             if len(closes) < self.strategy.warmup_bars:
                 log.info("warming up (%d/%d bars); holding positions", len(closes), self.strategy.warmup_bars)
                 return
+            self._refresh_quote_volume()
+            self.strategy.set_context(quote_volume=self.quote_volume, holdings=snap.weights(), tradable=self.tradable)
             raw = self.strategy.target_weights(closes)
             targets = self.risk.clip_targets(raw, self.tradable)
         log.info("targets (%d): %s", len(targets), {p: round(w, 4) for p, w in sorted(targets.items())})

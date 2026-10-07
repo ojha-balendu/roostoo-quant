@@ -18,7 +18,9 @@ log = logging.getLogger(__name__)
 KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
 
 
-def fetch_recent_closes(symbol: str, interval: str, n_bars: int, session: requests.Session | None = None) -> pd.Series:
+def fetch_recent_klines(symbol: str, interval: str, n_bars: int,
+                        session: requests.Session | None = None) -> pd.DataFrame:
+    """Completed bars: close and quote_volume (USD traded), indexed by bar open time (UTC)."""
     session = session or requests.Session()
     rows: list[list] = []
     end_time: int | None = None
@@ -39,19 +41,32 @@ def fetch_recent_closes(symbol: str, interval: str, n_bars: int, session: reques
             break
     now_ms = time.time() * 1000
     closed = [r for r in rows if int(r[6]) < now_ms]  # completed bars only
-    return pd.Series(
-        [float(r[4]) for r in closed],
+    frame = pd.DataFrame(
+        {"close": [float(r[4]) for r in closed], "quote_volume": [float(r[7]) for r in closed]},
         index=pd.to_datetime([int(r[0]) for r in closed], unit="ms", utc=True),
-        name=symbol,
-    ).sort_index()
+    )
+    return frame[~frame.index.duplicated(keep="last")].sort_index()
+
+
+def fetch_recent_closes(symbol: str, interval: str, n_bars: int, session: requests.Session | None = None) -> pd.Series:
+    return fetch_recent_klines(symbol, interval, n_bars, session)["close"].rename(symbol)
+
+
+def warmup_panels(universe: dict[str, str], interval: str, n_bars: int) -> dict[str, pd.DataFrame]:
+    """{"close": panel, "quote_volume": panel} (time x pair) from Binance's public klines."""
+    session = requests.Session()
+    closes, volumes = {}, {}
+    for pair, symbol in universe.items():
+        try:
+            k = fetch_recent_klines(symbol, interval, n_bars, session)
+        except (requests.RequestException, ValueError, IndexError) as exc:
+            log.warning("warm-up: no Binance data for %s (%s): %s", pair, symbol, exc)
+            continue
+        closes[pair], volumes[pair] = k["close"], k["quote_volume"]
+    if not closes:
+        return {"close": pd.DataFrame(), "quote_volume": pd.DataFrame()}
+    return {"close": pd.DataFrame(closes).sort_index(), "quote_volume": pd.DataFrame(volumes).sort_index()}
 
 
 def warmup_close_panel(universe: dict[str, str], interval: str, n_bars: int) -> pd.DataFrame:
-    session = requests.Session()
-    series = {}
-    for pair, symbol in universe.items():
-        try:
-            series[pair] = fetch_recent_closes(symbol, interval, n_bars, session)
-        except (requests.RequestException, ValueError) as exc:
-            log.warning("warm-up: no Binance data for %s (%s): %s", pair, symbol, exc)
-    return pd.DataFrame(series).sort_index() if series else pd.DataFrame()
+    return warmup_panels(universe, interval, n_bars)["close"]

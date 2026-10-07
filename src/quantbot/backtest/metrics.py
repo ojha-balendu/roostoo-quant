@@ -9,6 +9,17 @@ import pandas as pd
 
 SECONDS_PER_YEAR = 365 * 24 * 3600
 
+# Competition score (HK vs AU vs IN Quant Trading Hackathon 2026)
+SCORE_WEIGHTS = {"sortino": 0.4, "sharpe": 0.3, "calmar": 0.3}
+
+
+def competition_score(m: dict[str, float]) -> float:
+    """0.4 * Sortino + 0.3 * Sharpe + 0.3 * Calmar (NaN if any component is undefined)."""
+    vals = [m.get(k, float("nan")) for k in SCORE_WEIGHTS]
+    if not all(np.isfinite(v) for v in vals):
+        return float("nan")
+    return float(sum(w * v for w, v in zip(SCORE_WEIGHTS.values(), vals, strict=True)))
+
 
 def periods_per_year(index: pd.Index) -> float:
     if len(index) < 2:
@@ -33,7 +44,7 @@ def compute_metrics(equity: pd.Series, ppy: float | None = None) -> dict[str, fl
     std = rets.std()
     downside = math.sqrt(float(np.mean(np.minimum(rets, 0.0) ** 2)))
     mdd = max_drawdown(equity)
-    return {
+    out = {
         "total_return": float(total),
         "cagr": float(cagr),
         "ann_vol": float(std * math.sqrt(ppy)),
@@ -43,3 +54,5 @@ def compute_metrics(equity: pd.Series, ppy: float | None = None) -> dict[str, fl
         "calmar": float(cagr / abs(mdd)) if mdd < 0 else float("nan"),
         "final_equity": float(equity.iloc[-1]),
     }
+    out["score"] = competition_score(out)
+    return out
