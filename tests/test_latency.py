@@ -73,3 +73,29 @@ def test_probe_records_and_analyses_end_to_end(tmp_path, capsys):
     assert "TRADES THE LAG WOULD ALLOW" in out and "1 of 1 pairs lag Binance" in out
     p = panels(rec)
     assert int(lag_estimate(p["r_last"], p["b_mid"], max_lag=10)["lag_polls"].iloc[0]) == 3
+
+
+def test_kelly_stats():
+    from quantbot.analysis.latency import kelly_stats
+
+    rng = np.random.default_rng(0)
+    net = rng.normal(0.002, 0.004, 400)                                    # +20 bps mean, 40 bps spread
+    k = kelly_stats(net, trades_per_day=100, cap=10.0, kelly_scale=1.0)
+    mu, s = net.mean(), net.std(ddof=1)
+    assert abs(k["kelly"] - mu / s ** 2) < 1e-9
+    assert abs(k["kelly_cons"] - (mu - s / 20) / s ** 2) < 1e-9          # mu minus one standard error
+    f = k["f"]
+    assert abs(k["growth_day"] - 100 * (f * mu - f ** 2 * s ** 2 / 2)) < 1e-12
+    capped = kelly_stats(net, 100, cap=0.25)
+    assert capped["f"] == 0.25 and abs(capped["profit_day"] - 0.25 * mu * 100) < 1e-12
+    losing = kelly_stats(rng.normal(-0.001, 0.004, 400), 100, cap=0.25)
+    assert losing["f"] == 0 and losing["growth_day"] == 0                   # no edge: bet nothing
+    assert kelly_stats(np.array([0.005]), 10, 0.25)["f"] == 0               # one trade: no variance, no bet
+
+
+def test_margin_sweep_trades_fall_as_margin_rises():
+    from quantbot.analysis.latency import margin_sweep
+
+    p = panels(recording(lag=3))
+    s = margin_sweep(p, fee=0.001, margins=[5, 20, 60], horizon=5, hours=400 / 3600, cap=0.25)
+    assert list(s["trades"]) == sorted(s["trades"], reverse=True) and (s["entry_gap_bps"] == [25, 40, 80]).all()

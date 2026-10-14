@@ -60,15 +60,17 @@ def opportunities(p: dict[str, pd.DataFrame], fee: float, margin_bps: float, hor
     shorts). One trade at a time per pair."""
     thr = 2 * fee + margin_bps / 1e4
     rb, ra, bm = p["r_bid"].to_numpy(), p["r_ask"].to_numpy(), p["b_mid"].to_numpy()
+    n_t = len(bm)
+    with np.errstate(invalid="ignore"):
+        long_sig = bm > ra * (1 + thr)
+        short_sig = rb > bm * (1 + thr)
     rows = []
     for j, pair in enumerate(p["r_last"].columns):
         busy_until = -1
-        for t in range(len(bm) - horizon):
-            if t <= busy_until or not (np.isfinite(ra[t, j]) and np.isfinite(rb[t, j]) and np.isfinite(bm[t, j])):
+        for t in np.flatnonzero(long_sig[:, j] | short_sig[:, j]):       # only seconds with a signal
+            if t >= n_t - horizon or t <= busy_until:
                 continue
-            side = 1 if bm[t, j] > ra[t, j] * (1 + thr) else (-1 if rb[t, j] > bm[t, j] * (1 + thr) else 0)
-            if side == 0:
-                continue
+            side = 1 if long_sig[t, j] else -1
             if side == 1:
                 pnl = rb[t + horizon, j] / ra[t, j] - 1 - 2 * fee
                 gap = bm[t, j] / ra[t, j] - 1
@@ -76,6 +78,49 @@ def opportunities(p: dict[str, pd.DataFrame], fee: float, margin_bps: float, hor
                 pnl = rb[t, j] / ra[t + horizon, j] - 1 - 2 * fee
                 gap = rb[t, j] / bm[t, j] - 1
             if np.isfinite(pnl):
-                rows.append({"pair": pair, "poll": t, "side": side, "gap_bps": gap * 1e4, "net_bps": pnl * 1e4})
+                rows.append({"pair": pair, "poll": int(t), "side": side, "gap_bps": gap * 1e4, "net_bps": pnl * 1e4})
                 busy_until = t + horizon
     return pd.DataFrame(rows, columns=["pair", "poll", "side", "gap_bps", "net_bps"])
+
+
+# ---------------------------------------------------------------------------------------- margin sweep
+def kelly_stats(net: np.ndarray, trades_per_day: float, cap: float, kelly_scale: float = 0.5) -> dict[str, float]:
+    """Kelly sizing for many small trades with returns `net` (decimal, per unit of position).
+    f* = mu / sigma^2 (continuous approximation). The conservative version uses mu minus one standard
+    error. The size used is kelly_scale x conservative f*, capped at `cap` (share of equity per trade).
+    Growth per trade at size f: f mu - f^2 sigma^2 / 2; per day: x trades per day."""
+    n = len(net)
+    out = {"n": n, "mu": np.nan, "sigma": np.nan, "win": np.nan, "kelly": np.nan, "kelly_cons": np.nan,
+           "f": 0.0, "profit_day": 0.0, "growth_day": 0.0}
+    if n == 0:
+        return out
+    mu = float(np.mean(net))
+    out.update(mu=mu, win=float(np.mean(net > 0)))
+    if n < 2:
+        return out
+    sigma = float(np.std(net, ddof=1))
+    out["sigma"] = sigma
+    if sigma <= 0:
+        return out
+    se = sigma / np.sqrt(n)
+    out["kelly"] = mu / sigma ** 2
+    mu_c = max(mu - se, 0.0)
+    out["kelly_cons"] = mu_c / sigma ** 2
+    f = float(min(kelly_scale * out["kelly_cons"], cap))
+    out["f"] = f
+    out["profit_day"] = f * mu * trades_per_day
+    out["growth_day"] = trades_per_day * (f * mu - f ** 2 * sigma ** 2 / 2)
+    return out
+
+
+def margin_sweep(p: dict[str, pd.DataFrame], fee: float, margins, horizon: int, hours: float, cap: float,
+                 kelly_scale: float = 0.5) -> pd.DataFrame:
+    rows = []
+    for m in margins:
+        ops = opportunities(p, fee, m, horizon)
+        net = ops["net_bps"].to_numpy() / 1e4
+        tph = len(ops) / hours if hours > 0 else np.nan
+        k = kelly_stats(net, tph * 24, cap, kelly_scale)
+        rows.append({"margin_bps": m, "entry_gap_bps": 2 * fee * 1e4 + m, "trades": len(ops), "per_hour": tph,
+                     "pairs": ops["pair"].nunique() if len(ops) else 0, **k})
+    return pd.DataFrame(rows)
