@@ -134,10 +134,12 @@ def v2_weights(A_row: np.ndarray, cur: np.ndarray, elig_row: np.ndarray, beta_ro
 
 # --------------------------------------------------------------------------------------- simulation
 def simulate(prices: np.ndarray, index: pd.DatetimeIndex, decide: Callable[[int, np.ndarray], np.ndarray],
-             start: int, end: int, sim_cfg: SimConfig) -> dict:
-    """Run bars start..end-1 from a flat book. decide(t, current_weights) -> target weights."""
-    rets = simple_returns(prices)
-    tradable = np.isfinite(prices)
+             start: int, end: int, sim_cfg: SimConfig, rets: np.ndarray | None = None,
+             tradable: np.ndarray | None = None) -> dict:
+    """Run bars start..end-1 from a flat book. decide(t, current_weights) -> target weights.
+    Pass precomputed `rets` (simple_returns(prices)) and `tradable` when running many windows."""
+    rets = simple_returns(prices) if rets is None else rets
+    tradable = np.isfinite(prices) if tradable is None else tradable
     end = min(end, len(prices) - 1)
     sim = PortfolioSim(prices.shape[1], sim_cfg)
     curve, gross, npos, pnl_total = [sim.equity], [], [], 0.0

@@ -8,10 +8,16 @@ Every rebalance (daily at 00:00 UTC), using only data up to that bar's close:
   consistency  optional filter: the share of days that moved in the trend's direction must be at least
                `min_consistency` (gradual trends persist more than jumps: "frog in the pan")
   proximity    optional: z-score of price / 30-day high added to the score (anchoring to recent highs)
-  selection    long the k best, short the k worst; with `buffer_k` a held coin stays until it falls
-               outside the best (worst) buffer_k, which cuts turnover
-  weights      equal, or inverse residual volatility within each leg; BTC hedge to zero beta; gross
-               <= `gross`; per-coin cap; optional portfolio volatility target from the last 30 days
+  selection    long the k best, short the k worst (or `k_short` worst); with `buffer_k` (`buffer_short`)
+               a held coin stays until it falls outside the best (worst) buffer, which cuts turnover
+  weights      within each leg, by `weighting`, using each coin's residual volatility sigma:
+                 equal        1 / n
+                 inverse_vol  (1/sigma_i) / sum(1/sigma)
+                 mul_vol      sigma_i / sum(sigma)          (the most volatile coin gets the most)
+                 exp_vol      exp(-sigma_i / sum(sigma)) / sum_k exp(-sigma_k / sum(sigma))
+               k = 0 or k_short = 0 leaves that leg empty (the BTC hedge offsets the other leg alone)
+               each leg totals the same dollars; BTC hedge to zero beta; gross <= `gross`; per-coin
+               cap; optional portfolio volatility target from the last 30 days
 Between rebalances positions are held unchanged.
 """
 
@@ -30,12 +36,14 @@ HELD_MIN_WEIGHT = 0.001   # smaller positions (float residue, exchange dust) do 
 class MomentumConfig:
     k: int = 5
     buffer_k: int | None = None
+    k_short: int | None = None        # shorts, if different from k
+    buffer_short: int | None = None   # short-side buffer, if different from buffer_k
     lookbacks_days: list[int] = field(default_factory=lambda: [16])
     skip_days: int = 0
     residual_riskadj: bool = False
     min_consistency: float | None = None
     proximity: bool = False
-    weighting: str = "equal"          # "equal" or "inverse_vol"
+    weighting: str = "equal"          # "equal", "inverse_vol", "mul_vol" or "exp_vol"
     vol_target: float | None = None   # annualised, e.g. 0.20
     max_weight: float = 1.0
     gross: float = 0.95
@@ -89,6 +97,22 @@ def _pick(pool: np.ndarray, score: np.ndarray, held: np.ndarray, k: int, buffer_
     return np.array(keep + fill, dtype=int)
 
 
+def leg_weights(sigma: np.ndarray, weighting: str) -> np.ndarray:
+    """Relative weights of the coins in one leg (they are normalised to the leg's total afterwards).
+    Missing or non-positive volatilities are replaced by the leg's average."""
+    if weighting == "equal" or len(sigma) == 0:
+        return np.ones(len(sigma))
+    sig = np.where(np.isfinite(sigma) & (sigma > 0), sigma, np.nan)
+    sig = np.where(np.isfinite(sig), sig, np.nanmean(sig) if np.isfinite(sig).any() else 1.0)
+    if weighting == "inverse_vol":
+        return 1.0 / sig
+    if weighting == "mul_vol":
+        return sig
+    if weighting == "exp_vol":
+        return np.exp(-sig / sig.sum())
+    raise ValueError(f"unknown weighting {weighting!r}: use equal, inverse_vol, mul_vol or exp_vol")
+
+
 def sleeve_weights(t: int, cur: np.ndarray, x: dict[str, np.ndarray], beta: np.ndarray, eligible: np.ndarray,
                    rets: np.ndarray, cfg: MomentumConfig) -> np.ndarray:
     """Target weights at rebalance bar t: coins then BTC (last slot)."""
@@ -96,7 +120,9 @@ def sleeve_weights(t: int, cur: np.ndarray, x: dict[str, np.ndarray], beta: np.n
     w = np.zeros(n + 1)
     s, b = x["score"][t], beta[t]
     ok = eligible[t] & np.isfinite(s) & np.isfinite(b)
-    if ok.sum() < 2 * cfg.k:
+    k_short = cfg.k_short if cfg.k_short is not None else cfg.k
+    buffer_short = cfg.buffer_short if cfg.buffer_short is not None else cfg.buffer_k
+    if ok.sum() < max(cfg.k + k_short, 1) or cfg.k + k_short == 0:
         return w
     long_pool, short_pool = ok.copy(), ok.copy()
     if cfg.min_consistency is not None:
@@ -105,17 +131,12 @@ def sleeve_weights(t: int, cur: np.ndarray, x: dict[str, np.ndarray], beta: np.n
         long_pool &= good & (d > 0)
         short_pool &= good & (d < 0)
     longs = _pick(long_pool, s, cur[:n] > HELD_MIN_WEIGHT, cfg.k, cfg.buffer_k, True)
-    shorts = _pick(short_pool & ~np.isin(np.arange(n), longs), s, cur[:n] < -HELD_MIN_WEIGHT, cfg.k, cfg.buffer_k,
+    shorts = _pick(short_pool & ~np.isin(np.arange(n), longs), s, cur[:n] < -HELD_MIN_WEIGHT, k_short, buffer_short,
                    False)
     for leg, sign in ((longs, 1.0), (shorts, -1.0)):
         if len(leg) == 0:
             continue
-        if cfg.weighting == "inverse_vol":
-            r = x["risk"][t][leg]
-            raw = np.where(np.isfinite(r) & (r > 0), 1.0 / r, np.nan)
-            raw = np.where(np.isfinite(raw), raw, np.nanmean(raw) if np.isfinite(raw).any() else 1.0)
-        else:
-            raw = np.ones(len(leg))
+        raw = leg_weights(x["risk"][t][leg], cfg.weighting)
         w[leg] = sign * raw / raw.sum()
     w[n] = -float(np.dot(w[:n][ok], b[ok]))
     total = np.abs(w).sum()

@@ -102,3 +102,67 @@ def test_competition_score_formula_and_summaries():
                          "beta_btc": [np.nan] * 3})
     s = summarize(rows)
     assert s["median_score"] == 2.0 and abs(s["mean_score"] - 7 / 3) < 1e-12
+
+
+def test_leg_weights_three_schemes():
+    from quantbot.backtest.momentum import leg_weights
+
+    sig = np.array([0.01, 0.02, 0.04, np.nan])
+    assert np.allclose(leg_weights(sig, "equal"), 1.0)
+    inv = leg_weights(sig, "inverse_vol")
+    filled = np.array([0.01, 0.02, 0.04, np.mean([0.01, 0.02, 0.04])])     # missing sigma -> leg average
+    assert np.allclose(inv, 1 / filled)
+    assert np.allclose(leg_weights(sig, "mul_vol"), filled)                # proportional to volatility
+    ex = leg_weights(sig, "exp_vol")
+    assert np.allclose(ex, np.exp(-filled / filled.sum()))                 # the requested formula
+    rng = np.random.default_rng(0)
+    for _ in range(200):                                                    # never more than e apart
+        w = leg_weights(rng.lognormal(-4, 1.0, rng.integers(1, 9)), "exp_vol")
+        assert w.max() / w.min() <= np.e + 1e-12
+    assert leg_weights(np.array([0.03]), "exp_vol").shape == (1,)
+
+
+def test_uneven_long_and_short_counts_keep_equal_dollar_legs():
+    close, resid, beta, elig = market(N=20)
+    for scheme in ("equal", "inverse_vol", "exp_vol"):
+        mc = MomentumConfig(residual_riskadj=True, k=2, k_short=7, buffer_k=4, buffer_short=14, weighting=scheme)
+        x, B, E, R = arrays(close, resid, beta, elig, mc)
+        t = 24 * 70
+        w = sleeve_weights(t, np.zeros(B.shape[1] + 1), x, B, E, R, mc)
+        coins = w[:-1]
+        assert (coins > 0).sum() == 2 and (coins < 0).sum() == 7
+        assert abs(coins[coins > 0].sum() + coins[coins < 0].sum()) < 1e-12   # equal dollars long and short
+        assert abs(np.dot(coins, B[t]) + w[-1]) < 1e-12 and abs(np.abs(w).sum() - 0.95) < 1e-12
+        if scheme != "equal":
+            shorts = np.flatnonzero(coins < 0)
+            calm = shorts[np.argmin(x["risk"][t][shorts])]
+            assert coins[calm] == coins[shorts].min()                     # calmest short gets the most
+
+
+def test_short_buffer_is_separate():
+    score = np.arange(20, 0, -1).astype(float)                            # coin 19 is the worst
+    held = np.zeros(20, bool)
+    held[11] = True                                                       # 9th worst
+    from quantbot.backtest.momentum import _pick
+
+    assert 11 in _pick(np.ones(20, bool), score, held, 3, 10, False)      # inside the worst 10: kept
+    assert 11 not in _pick(np.ones(20, bool), score, held, 3, 6, False)   # outside the worst 6: dropped
+
+
+def test_one_sided_books_and_empty_book():
+    close, resid, beta, elig = market(N=20)
+    t = 24 * 70
+    for k, k_short in ((0, 4), (3, 0)):
+        mc = MomentumConfig(residual_riskadj=True, k=k, k_short=k_short, weighting="mul_vol")
+        x, B, E, R = arrays(close, resid, beta, elig, mc)
+        w = sleeve_weights(t, np.zeros(B.shape[1] + 1), x, B, E, R, mc)
+        coins = w[:-1]
+        assert (coins > 0).sum() == k and (coins < 0).sum() == k_short
+        assert abs(np.dot(coins, B[t]) + w[-1]) < 1e-12                     # hedge still cancels the beta
+        assert np.sign(w[-1]) == (1 if k == 0 else -1)                        # shorts only -> BTC long
+        assert abs(np.abs(w).sum() - 0.95) < 1e-12
+        vols = x["risk"][t][np.flatnonzero(coins)]
+        assert np.argmax(np.abs(coins[np.flatnonzero(coins)])) == np.argmax(vols)   # most volatile gets the most
+    mc0 = MomentumConfig(residual_riskadj=True, k=0, k_short=0)
+    x, B, E, R = arrays(close, resid, beta, elig, mc0)
+    assert not sleeve_weights(t, np.zeros(B.shape[1] + 1), x, B, E, R, mc0).any()

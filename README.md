@@ -231,7 +231,12 @@ held-back final year where applicable.
 | 17 | Tokenized gold (PAXG) vs BTC: correlation of VWAP returns at 1h/4h/1d/1w, behaviour on BTC's worst days | `22_gold_btc_correlation.py` | VWAP = USD traded / coins traded per bar. |
 | 18 | BTC/PAXG lead-lag in both directions (1m-1d), before vs since 2026, tradeability after costs and staleness | `23_paxg_btc_leadlag.py` | Close prices (VWAP overlap creates fake lags). |
 | 19 | Combined portfolio: momentum C + long-only BTC trend + RSI 15/85, several capital splits, netted execution, 1-minute bars | `24_combined_portfolio.py` | Every 14-day window in the 1-minute history plus the last 30 days, ranked by median score. |
-| 20 | Final portfolio (ensemble of the slow trend books) | `08_final_portfolio.py` | See its output: every 14-day window since 2023 plus a continuous backtest, using exactly the live configuration. |
+| 20 | Momentum sleeve grid: 0-8 longs x 0-8 shorts x in-leg weightings (equal, inverse volatility, proportional to volatility; exp(-sigma/sum sigma) optional) | `25_long_short_grid.py` | 8x8 score matrices for the last 30 days and the median over every 14-day window; cell (5,5) equal = live. |
+| 21 | Stop-and-switch: start 2 long / 1 short (equal), switch for good to 7/7 inverse volatility when equity falls X% below its peak | `26_stop_switch.py` | Last 30 days by default; `--windows` adds every 14-day window and the windows that looked like now. |
+| 22 | Threshold momentum: long every coin with score > T, short every coin with score < -T, exit at T/2; fixed or inverse-volatility size; hourly or daily checks | `27_threshold_momentum.py` | The number of longs and shorts follows the market; last 30 days, every 14-day window, windows like now. |
+| 23 | Momentum books compared over the most recent k days (5/10/15/20/30), continuous or from flat | `28_recent_periods.py` | Short periods: read return and drawdown first (annualised ratios explode). |
+| 24 | Latency probe: does Roostoo's price lag Binance? Records both every second, measures the lag per pair and the trades it would allow net of fees | `29_latency_probe.py` | Prices only, no orders. Check the competition rules before trading on stale prices. |
+| 25 | Final portfolio (ensemble of the slow trend books) | `08_final_portfolio.py` | See its output: every 14-day window since 2023 plus a continuous backtest, using exactly the live configuration. |
 
 Main lesson: in liquid crypto at retail fees, small frequent price patterns do not survive costs;
 what survives is slow, risk-controlled exposure that limits drawdowns.
