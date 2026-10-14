@@ -54,10 +54,14 @@ def lag_estimate(r_last: pd.DataFrame, b_mid: pd.DataFrame, max_lag: int) -> pd.
     return pd.DataFrame(rows).T
 
 
-def opportunities(p: dict[str, pd.DataFrame], fee: float, margin_bps: float, horizon: int) -> pd.DataFrame:
-    """Trades the lag would allow, net of a round trip: buy at Roostoo's ask when the reference mid is above
-    it by more than 2 x fee + margin, sell at Roostoo's bid `horizon` polls later (and the mirror image for
-    shorts). One trade at a time per pair."""
+def opportunities(p: dict[str, pd.DataFrame], fee: float, margin_bps: float, horizon: int,
+                  delay: int = 0) -> pd.DataFrame:
+    """Trades the lag would allow, net of a round trip: when the reference mid is above Roostoo's ask by more
+    than 2 x fee + margin at poll t, buy at Roostoo's ask at poll t + delay and sell at its bid `horizon`
+    polls after that (and the mirror image for shorts). One trade at a time per pair.
+    delay = 0 enters at the quote recorded in the same poll, which was fetched just BEFORE the reference
+    price that triggered the trade: slightly optimistic. delay >= 1 enters at a later quote (realistic:
+    an order needs time to arrive)."""
     thr = 2 * fee + margin_bps / 1e4
     rb, ra, bm = p["r_bid"].to_numpy(), p["r_ask"].to_numpy(), p["b_mid"].to_numpy()
     n_t = len(bm)
@@ -68,18 +72,19 @@ def opportunities(p: dict[str, pd.DataFrame], fee: float, margin_bps: float, hor
     for j, pair in enumerate(p["r_last"].columns):
         busy_until = -1
         for t in np.flatnonzero(long_sig[:, j] | short_sig[:, j]):       # only seconds with a signal
-            if t >= n_t - horizon or t <= busy_until:
+            e = t + delay                                                  # entry poll
+            if e + horizon >= n_t or t <= busy_until:
                 continue
             side = 1 if long_sig[t, j] else -1
             if side == 1:
-                pnl = rb[t + horizon, j] / ra[t, j] - 1 - 2 * fee
+                pnl = rb[e + horizon, j] / ra[e, j] - 1 - 2 * fee
                 gap = bm[t, j] / ra[t, j] - 1
             else:
-                pnl = rb[t, j] / ra[t + horizon, j] - 1 - 2 * fee
+                pnl = rb[e, j] / ra[e + horizon, j] - 1 - 2 * fee
                 gap = rb[t, j] / bm[t, j] - 1
             if np.isfinite(pnl):
                 rows.append({"pair": pair, "poll": int(t), "side": side, "gap_bps": gap * 1e4, "net_bps": pnl * 1e4})
-                busy_until = t + horizon
+                busy_until = e + horizon
     return pd.DataFrame(rows, columns=["pair", "poll", "side", "gap_bps", "net_bps"])
 
 
@@ -114,13 +119,14 @@ def kelly_stats(net: np.ndarray, trades_per_day: float, cap: float, kelly_scale:
 
 
 def margin_sweep(p: dict[str, pd.DataFrame], fee: float, margins, horizon: int, hours: float, cap: float,
-                 kelly_scale: float = 0.5) -> pd.DataFrame:
+                 kelly_scale: float = 0.5, delay: int = 0) -> pd.DataFrame:
     rows = []
     for m in margins:
-        ops = opportunities(p, fee, m, horizon)
+        ops = opportunities(p, fee, m, horizon, delay)
         net = ops["net_bps"].to_numpy() / 1e4
         tph = len(ops) / hours if hours > 0 else np.nan
         k = kelly_stats(net, tph * 24, cap, kelly_scale)
         rows.append({"margin_bps": m, "entry_gap_bps": 2 * fee * 1e4 + m, "trades": len(ops), "per_hour": tph,
-                     "pairs": ops["pair"].nunique() if len(ops) else 0, **k})
+                     "pairs": ops["pair"].nunique() if len(ops) else 0,
+                     "mean_gap_bps": ops["gap_bps"].mean() if len(ops) else np.nan, **k})
     return pd.DataFrame(rows)

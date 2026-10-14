@@ -99,3 +99,12 @@ def test_margin_sweep_trades_fall_as_margin_rises():
     p = panels(recording(lag=3))
     s = margin_sweep(p, fee=0.001, margins=[5, 20, 60], horizon=5, hours=400 / 3600, cap=0.25)
     assert list(s["trades"]) == sorted(s["trades"], reverse=True) and (s["entry_gap_bps"] == [25, 40, 80]).all()
+
+
+def test_entry_delay_removes_profit_when_the_lag_is_shorter_than_the_delay():
+    long_lag = panels(recording(lag=3))
+    short_lag = panels(recording(lag=1))
+    assert opportunities(long_lag, 0.001, 5, 5, delay=1)["net_bps"].mean() > 30       # 3 s lag survives 1 s delay
+    assert opportunities(short_lag, 0.001, 5, 5, delay=0)["net_bps"].mean() > 30      # optimistic: looks great
+    late = opportunities(short_lag, 0.001, 5, 5, delay=1)
+    assert late.empty or late["net_bps"].mean() < 0                                  # but it was all look-ahead

@@ -147,7 +147,7 @@ def analyse(path: Path, fee: float, margin_bps: float, max_lag_s: float) -> None
 
 
 def sweep_report(path: Path, fee: float, margins: list[float], horizons_s: list[float], cap: float,
-                 kelly_scale: float) -> None:
+                 kelly_scale: float, delays_s: list[float]) -> None:
     rec = pd.read_csv(path)
     p = panels(rec)
     sp = p["seconds_per_poll"]
@@ -157,31 +157,38 @@ def sweep_report(path: Path, fee: float, margins: list[float], horizons_s: list[
     print(f"{path}: {hours:.1f} hours; margins {margins[0]:g}..{margins[-1]:g} bps (entry gap = {2 * fee * 1e4:.0f} bps "
           f"round trip + margin); size = {kelly_scale:g} x Kelly with the mean cut by one standard error, "
           f"capped at {cap:.0%} of equity per trade")
-    for h_s in horizons_s:
-        h = max(1, int(round(h_s / sp)))
-        t = margin_sweep(p, fee, margins, h, hours, cap, kelly_scale)
-        print(f"\nEXIT AFTER {h_s:g} s:")
-        print(pd.DataFrame({
-            "entry gap": t["entry_gap_bps"].map("{:.0f} bps".format), "trades": t["trades"],
-            "per hour": t["per_hour"].map("{:.1f}".format), "coins": t["pairs"],
-            "won": t["win"].map(lambda v: f"{v:.0%}" if np.isfinite(v) else "n/a"),
-            "mean net": t["mu"].map(lambda v: f"{v * 1e4:+.1f} bps" if np.isfinite(v) else "n/a"),
-            "spread": t["sigma"].map(lambda v: f"{v * 1e4:.1f} bps" if np.isfinite(v) else "n/a"),
-            "full Kelly": t["kelly"].map(lambda v: f"{v:.1f}x" if np.isfinite(v) else "n/a"),
-            "cautious Kelly": t["kelly_cons"].map(lambda v: f"{v:.1f}x" if np.isfinite(v) else "n/a"),
-            "size used": t["f"].map("{:.0%}".format),
-            "profit/day": t["profit_day"].map("{:+.2%}".format),
-            "growth/day": t["growth_day"].map("{:+.2%}".format)}).set_axis(
-                [f"margin {m:g}" for m in t["margin_bps"]]).to_string())
-        best = t.loc[t["growth_day"].idxmax()] if (t["growth_day"] > 0).any() else None
-        if best is None:
-            print("  no margin has a positive edge after the cautious adjustment")
-            continue
-        warn = "  (few trades: confirm on a new recording)" if best["trades"] < 30 else ""
-        print(f"  BEST: margin {best['margin_bps']:g} bps (enter at a {best['entry_gap_bps']:.0f} bps gap): "
-              f"{best['per_hour']:.1f} trades/hour, {best['win']:.0%} won, {best['mu'] * 1e4:+.1f} bps net per trade, "
-              f"size {best['f']:.0%} of equity -> about {best['growth_day']:+.2%} per day{warn}")
-    print("\n'cautious Kelly' uses the average minus one standard error, so a margin with a few lucky trades is not\n"
+    for d_s in delays_s:
+        d = int(round(d_s / sp))
+        for h_s in horizons_s:
+            h = max(1, int(round(h_s / sp)))
+            t = margin_sweep(p, fee, margins, h, hours, cap, kelly_scale, d)
+            print(f"\nENTRY {d_s:g} s AFTER THE SIGNAL, EXIT {h_s:g} s LATER:")
+            print(pd.DataFrame({
+                "entry gap": t["entry_gap_bps"].map("{:.0f} bps".format),
+                "avg gap": t["mean_gap_bps"].map(lambda v: f"{v:.0f} bps" if np.isfinite(v) else "n/a"),
+                "trades": t["trades"],
+                "per hour": t["per_hour"].map("{:.1f}".format), "coins": t["pairs"],
+                "won": t["win"].map(lambda v: f"{v:.0%}" if np.isfinite(v) else "n/a"),
+                "mean net": t["mu"].map(lambda v: f"{v * 1e4:+.1f} bps" if np.isfinite(v) else "n/a"),
+                "spread": t["sigma"].map(lambda v: f"{v * 1e4:.1f} bps" if np.isfinite(v) else "n/a"),
+                "full Kelly": t["kelly"].map(lambda v: f"{v:.1f}x" if np.isfinite(v) else "n/a"),
+                "cautious Kelly": t["kelly_cons"].map(lambda v: f"{v:.1f}x" if np.isfinite(v) else "n/a"),
+                "size used": t["f"].map("{:.0%}".format),
+                "profit/day": t["profit_day"].map("{:+.2%}".format),
+                "growth/day": t["growth_day"].map("{:+.2%}".format)}).set_axis(
+                    [f"margin {m:g}" for m in t["margin_bps"]]).to_string())
+            best = t.loc[t["growth_day"].idxmax()] if (t["growth_day"] > 0).any() else None
+            if best is None:
+                print("  no margin has a positive edge after the cautious adjustment")
+                continue
+            warn = "  (few trades: confirm on a new recording)" if best["trades"] < 30 else ""
+            print(f"  BEST (delay {d_s:g} s, exit {h_s:g} s): margin {best['margin_bps']:g} bps (enter at a {best['entry_gap_bps']:.0f} bps gap): "
+                  f"{best['per_hour']:.1f} trades/hour, {best['win']:.0%} won, {best['mu'] * 1e4:+.1f} bps net per trade, "
+                  f"size {best['f']:.0%} of equity -> about {best['growth_day']:+.2%} per day{warn}")
+    print("\nDelay 0 enters at the Roostoo quote fetched just before the Binance price that triggered the trade\n"
+          "(optimistic); delay 1 enters at the next poll's quote, about a second later (pessimistic: a real order\n"
+          "arrives in ~0.2 s). Trust a margin only if it is profitable with the delay.\n"
+          "'cautious Kelly' uses the average minus one standard error, so a margin with a few lucky trades is not\n"
           "favoured. Kelly far above 1x means the edge per trade is large relative to its spread; the cap keeps\n"
           "the size realistic. Picking the best margin on this recording flatters it: confirm on a new one.")
 
@@ -196,6 +203,7 @@ def main() -> None:
     ap.add_argument("--max-lag", type=float, default=30, help="longest lag to look for, seconds")
     ap.add_argument("--sweep", help="margin range for a Kelly sweep, e.g. 5:30 (with --analyse)")
     ap.add_argument("--horizons", default="10,60", help="exit times for the sweep, seconds")
+    ap.add_argument("--delays", default="0,1", help="entry delays after the signal for the sweep, seconds")
     ap.add_argument("--cap", type=float, default=0.25, help="largest share of equity per trade")
     ap.add_argument("--kelly-scale", type=float, default=0.5, help="fraction of Kelly to use (0.5 = half Kelly)")
     args = ap.parse_args()
@@ -205,7 +213,7 @@ def main() -> None:
         lo, hi = (float(v) for v in args.sweep.split(":"))
         margins = [float(m) for m in np.arange(lo, hi + 1e-9, 1.0)]
         sweep_report(Path(args.analyse), fee, margins, [float(h) for h in args.horizons.split(",")], args.cap,
-                     args.kelly_scale)
+                     args.kelly_scale, [float(d) for d in args.delays.split(",")])
         return
     if args.analyse:
         analyse(Path(args.analyse), fee, args.margin_bps, args.max_lag)
