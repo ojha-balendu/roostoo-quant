@@ -108,3 +108,59 @@ def test_entry_delay_removes_profit_when_the_lag_is_shorter_than_the_delay():
     assert opportunities(short_lag, 0.001, 5, 5, delay=0)["net_bps"].mean() > 30      # optimistic: looks great
     late = opportunities(short_lag, 0.001, 5, 5, delay=1)
     assert late.empty or late["net_bps"].mean() < 0                                  # but it was all look-ahead
+
+
+def test_lag_profile_recovers_a_planted_millisecond_lag():
+    from quantbot.analysis.latency import lag_profile, roostoo_changes
+
+    # Binance mid steps up from 100 to 101 at t=10.00; Roostoo reflects it 0.4 s later at t=10.40.
+    b = []
+    for i in range(2000):                                                 # 20 s at 100 Hz
+        t = i / 100
+        mid = 100.0 if t < 10.0 else 101.0
+        b.append({"ts": t, "pair": "AAA/USD", "mid": mid})
+    binance = pd.DataFrame(b)
+    reads = []
+    for i in range(400):                                                  # 20 s at 20 Hz
+        t = i / 20
+        mid = 100.0 if t < 10.40 else 101.0
+        reads.append({"ts": t, "pair": "AAA/USD", "mid": mid})
+    reads = pd.DataFrame(reads)
+
+    chg = roostoo_changes(reads)
+    assert len(chg) == 1 and chg.iloc[0]["old_mid"] == 100.0 and chg.iloc[0]["new_mid"] == 101.0
+    prof = lag_profile(reads, binance, window_s=5.0)
+    assert len(prof) == 1
+    assert abs(prof.iloc[0]["lag_s"] - 0.40) < 0.06                      # within one Roostoo read interval
+    assert prof.attrs["n_changes"] == 1 and prof.attrs["n_unmatched"] == 0
+
+
+def test_lag_profile_ignores_roostoo_moves_binance_did_not_make():
+    from quantbot.analysis.latency import lag_profile
+
+    binance = pd.DataFrame([{"ts": t / 100, "pair": "AAA/USD", "mid": 100.0} for t in range(1000)])
+    reads = pd.DataFrame([{"ts": t / 20, "pair": "AAA/USD", "mid": 100.0 if t < 100 else 105.0}
+                          for t in range(200)])                           # Roostoo jumps, Binance flat
+    prof = lag_profile(reads, binance, window_s=5.0)
+    assert prof.empty and prof.attrs["n_unmatched"] == 1
+
+
+def test_ms_probe_analyse_end_to_end(tmp_path, capsys):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "ms_probe", Path(__file__).resolve().parents[1] / "research" / "30_ms_latency.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    d = tmp_path / "ms_test"
+    d.mkdir()
+    # Binance steps 100 -> 101 at t=10.0; Roostoo follows ~0.3 s later.
+    pd.DataFrame([{"ts": i / 100, "pair": "AAA/USD", "mid": 100.0 if i / 100 < 10 else 101.0}
+                  for i in range(2000)]).to_csv(d / "binance.csv", index=False)
+    pd.DataFrame([{"ts": i / 20, "pair": "AAA/USD", "mid": 100.0 if i / 20 < 10.3 else 101.0}
+                  for i in range(400)]).to_csv(d / "roostoo.csv", index=False)
+    mod.analyse(d, window_s=5.0, fast_path_ms=200.0)
+    out = capsys.readouterr().out
+    assert "REACTION LAG" in out and "matched a prior Binance move" in out and "catchable" in out

@@ -236,6 +236,7 @@ held-back final year where applicable.
 | 22 | Threshold momentum: long every coin with score > T, short every coin with score < -T, exit at T/2; fixed or inverse-volatility size; hourly or daily checks | `27_threshold_momentum.py` | The number of longs and shorts follows the market; last 30 days, every 14-day window, windows like now. |
 | 23 | Momentum books compared over the most recent k days (5/10/15/20/30), continuous or from flat | `28_recent_periods.py` | Short periods: read return and drawdown first (annualised ratios explode). |
 | 24 | Latency probe: does Roostoo's price lag Binance? Records both every second, measures the lag per pair and the trades it would allow net of fees | `29_latency_probe.py` | Prices only, no orders. Check the competition rules before trading on stale prices. |
+| 24b | Millisecond reaction lag: stream Binance over WebSocket, poll Roostoo, measure how many ms after Binance moves Roostoo follows | `30_ms_latency.py` | Prices only, no orders. Needs websocket-client. |
 | 25 | Final portfolio (ensemble of the slow trend books) | `08_final_portfolio.py` | See its output: every 14-day window since 2023 plus a continuous backtest, using exactly the live configuration. |
 
 Main lesson: in liquid crypto at retail fees, small frequent price patterns do not survive costs;

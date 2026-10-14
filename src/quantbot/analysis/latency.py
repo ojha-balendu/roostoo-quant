@@ -130,3 +130,61 @@ def margin_sweep(p: dict[str, pd.DataFrame], fee: float, margins, horizon: int, 
                      "pairs": ops["pair"].nunique() if len(ops) else 0,
                      "mean_gap_bps": ops["gap_bps"].mean() if len(ops) else np.nan, **k})
     return pd.DataFrame(rows)
+
+
+# ----------------------------------------------------------- millisecond lag: Binance stream vs Roostoo reads
+def roostoo_changes(reads: pd.DataFrame) -> pd.DataFrame:
+    """From a table of Roostoo reads (ts in seconds, pair, mid), keep the moments its mid actually CHANGED.
+    Returns columns pair, ts, old_mid, new_mid (one row per change), sorted by ts within pair."""
+    out = []
+    for pair, g in reads.sort_values("ts").groupby("pair", sort=False):
+        mid = g["mid"].to_numpy()
+        ts = g["ts"].to_numpy()
+        changed = np.flatnonzero(np.diff(mid) != 0) + 1
+        for i in changed:
+            out.append({"pair": pair, "ts": ts[i], "old_mid": mid[i - 1], "new_mid": mid[i]})
+    return pd.DataFrame(out, columns=["pair", "ts", "old_mid", "new_mid"])
+
+
+def match_binance_move(r_change: dict, binance: pd.DataFrame, window_s: float, tol_frac: float = 0.25):
+    """A Roostoo change is 'explained by Binance' if, in the window_s seconds BEFORE the Roostoo change,
+    Binance's mid moved in the same direction and reached close to Roostoo's new level. Returns the lag in
+    seconds (Roostoo change ts minus the earliest Binance update that already showed the move), or None.
+    tol_frac: how much of the Roostoo step Binance must cover to count as the same move."""
+    b = binance[binance["pair"] == r_change["pair"]]
+    if b.empty:
+        return None
+    step = r_change["new_mid"] - r_change["old_mid"]
+    if step == 0:
+        return None
+    lo = r_change["ts"] - window_s
+    pre = b[(b["ts"] >= lo) & (b["ts"] <= r_change["ts"])]
+    if pre.empty:
+        return None
+    target = r_change["old_mid"] + tol_frac * step                       # Binance must reach at least here
+    bm = pre["mid"].to_numpy()
+    bt = pre["ts"].to_numpy()
+    reached = (bm >= target) if step > 0 else (bm <= target)
+    if not reached.any():
+        return None
+    first = bt[np.argmax(reached)]                                       # earliest Binance ts past the target
+    return float(r_change["ts"] - first)
+
+
+def lag_profile(reads: pd.DataFrame, binance: pd.DataFrame, window_s: float = 5.0, tol_frac: float = 0.25
+                ) -> pd.DataFrame:
+    """For every Roostoo price change, how many ms earlier Binance already showed the move.
+    Returns one row per matched change: pair, ts, lag_s. Unmatched changes (Roostoo moved without a
+    matching Binance move in the window) are dropped, with their count available via attrs."""
+    changes = roostoo_changes(reads)
+    rows, unmatched = [], 0
+    for _, c in changes.iterrows():
+        lag = match_binance_move(c.to_dict(), binance, window_s, tol_frac)
+        if lag is None:
+            unmatched += 1
+        else:
+            rows.append({"pair": c["pair"], "ts": c["ts"], "lag_s": lag})
+    out = pd.DataFrame(rows, columns=["pair", "ts", "lag_s"])
+    out.attrs["n_changes"] = len(changes)
+    out.attrs["n_unmatched"] = unmatched
+    return out
